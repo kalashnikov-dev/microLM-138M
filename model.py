@@ -16,10 +16,16 @@ class ModelConfig:
     n_heads: int = 12 
     n_kv_heads: int = 4
     n_layers: int = 16
+    eps_norm: float = 1e-5
+    std: float = 0.02
 
     @property
     def d_ff(self) -> int:
         return int(self.d_model * 8 / 3) # 2048
+
+    @property 
+    def scaled_std(self) -> float:
+        return self.std / math.sqrt(2 * self.n_layers) # for residual projections 
 
 
 class TransformerBlock(nn.Module):
@@ -28,30 +34,28 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.config = config
 
-        self.atn_norm = nn.RMSNorm(config.d_model, eps=1e-5)  # https://docs.pytorch.org/docs/2.13/generated/torch.nn.RMSNorm.html, eps for bfloat stability
+        self.atn_norm = nn.RMSNorm(config.d_model, eps=config.eps_norm)  # https://docs.pytorch.org/docs/2.13/generated/torch.nn.RMSNorm.html, eps for bfloat stability
         self.q = nn.Linear(config.d_model, config.d_head * config.n_heads, bias=False)
         self.k = nn.Linear(config.d_model, config.d_head * config.n_kv_heads, bias=False)
         self.v = nn.Linear(config.d_model, config.d_head * config.n_kv_heads, bias=False)
         self.o = nn.Linear(config.d_model, config.d_model, bias=False)
 
-        self.q_norm = nn.RMSNorm(config.d_head, eps=1e-5)
-        self.k_norm = nn.RMSNorm(config.d_head, eps=1e-5) 
-        self.pre_ff_norm = nn.RMSNorm(config.d_model, eps=1e-5)
+        self.q_norm = nn.RMSNorm(config.d_head, eps=config.eps_norm)
+        self.k_norm = nn.RMSNorm(config.d_head, eps=config.eps_norm) 
+        self.pre_ff_norm = nn.RMSNorm(config.d_model, eps=config.eps_norm)
 
         self.w1 = nn.Linear(config.d_model, config.d_ff, bias=False)
         self.w2 = nn.Linear(config.d_ff, config.d_model, bias=False)
         self.w3 = nn.Linear(config.d_model, config.d_ff, bias=False)
 
-        std = 0.02
-        nn.init.normal_(self.q.weight, mean=0.0, std=std)
-        nn.init.normal_(self.k.weight, mean=0.0, std=std)
-        nn.init.normal_(self.v.weight, mean=0.0, std=std)
-        nn.init.normal_(self.w1.weight, mean=0.0, std=std)
-        nn.init.normal_(self.w3.weight, mean=0.0, std=std)
+        nn.init.normal_(self.q.weight, mean=0.0, std=config.std)
+        nn.init.normal_(self.k.weight, mean=0.0, std=config.std)
+        nn.init.normal_(self.v.weight, mean=0.0, std=config.std)
+        nn.init.normal_(self.w1.weight, mean=0.0, std=config.std)
+        nn.init.normal_(self.w3.weight, mean=0.0, std=config.std)
 
-        scaled_std = std / math.sqrt(2 * config.n_layers)  # for residual projections 
-        nn.init.normal_(self.o.weight, mean=0.0, std=scaled_std)
-        nn.init.normal_(self.w2.weight, mean=0.0, std=scaled_std)
+        nn.init.normal_(self.o.weight, mean=0.0, std=config.scaled_std)
+        nn.init.normal_(self.w2.weight, mean=0.0, std=config.scaled_std)
 
 
     def forward(self, x, rope):
@@ -90,10 +94,10 @@ class Model(nn.Module):
 
         self.lm_head = nn.Embedding(config.vocab_size, config.d_model)
         self.rope = RotaryPositionalEmbeddings(dim=config.d_head, max_seq_len=config.seq_len + 1)  # https://meta-pytorch.org/torchtune/stable/generated/torchtune.modules.RotaryPositionalEmbeddings.html?highlight=rope
-        self.post_ff_norm = nn.RMSNorm(config.d_model, eps=1e-5)
+        self.post_ff_norm = nn.RMSNorm(config.d_model, eps=config.eps_norm)
         self.ff = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layers)])
 
-        nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.lm_head.weight, mean=0.0, std=config.std)
 
 
     def forward(self, tokens):

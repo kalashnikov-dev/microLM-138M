@@ -21,16 +21,6 @@ def _upload(file_path, repo_id):
     except Exception as e:
         print(e)
 
-def _clean():
-    checkpoints = glob.glob("checkpoint_*.pt")
-    checkpoints.sort(key=lambda x: int(re.search(r"checkpoint_(\d+)\.pt", x).group(1)))
-    
-    for ckpt in checkpoints[:-3]:
-        try:
-            os.remove(ckpt)
-        except OSError:
-            pass
-
 
 def save_checkpoint(raw_model, optimizer, scheduler, step, repo_id):
     file_name = f"checkpoint_{step}.pt"
@@ -50,7 +40,15 @@ def save_checkpoint(raw_model, optimizer, scheduler, step, repo_id):
     if step % 5000 == 0:
         executor.submit(_upload, file_name, repo_id)
 
-    _clean()
+    #remove old checkpoints
+    checkpoints = glob.glob("checkpoint_*.pt")
+    checkpoints.sort(key=lambda x: int(re.search(r"checkpoint_(\d+)\.pt", x).group(1)))
+    
+    for ckpt in checkpoints[:-3]:
+        try:
+            os.remove(ckpt)
+        except OSError:
+            pass
 
 
 def load_checkpoint(device):

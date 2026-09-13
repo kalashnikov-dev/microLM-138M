@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import math
 import time
 
@@ -6,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, IterableDataset
+from dataclasses import dataclass
 
 from datasets import load_dataset
 from liger_kernel.transformers.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyLoss
@@ -17,12 +17,17 @@ from model import Model, ModelConfig
 
 @dataclass
 class TrainConfig:
+    repo_id: str = "kalashnikov-dev/miniLM"
+
     batch_size: int = 64
     accumulation_steps: int = 2
     total_steps: int = 105000
     warmup_steps: int = 2000
+
     lr: float = 2e-3
-    repo_id: str = "kalashnikov-dev/miniLM"
+    weight_decay: float = 0.1
+    betas: tuple = (0.9, 0.95)
+    eps_optim: float = 1e-8
 
     @property
     def total_micro_steps(self):
@@ -39,7 +44,6 @@ class TrainConfig:
 
 
 class StreamingDataset(IterableDataset):
-    
     def __init__(self, stream, tokenizer, seq_len, batch_size):
         self.stream = stream
         self.tokenizer = tokenizer
@@ -105,8 +109,8 @@ def build_optimizer(raw_model, train_config):
     decay_params = [p for p in raw_model.parameters() if p.requires_grad and p.dim() >= 2]
     no_decay_params = [p for p in raw_model.parameters() if p.requires_grad and p.dim() < 2]
     optimizer = torch.optim.AdamW(
-        [{'params': decay_params, 'weight_decay': 0.1}, {'params': no_decay_params, 'weight_decay': 0.0}],
-        lr=train_config.lr, betas=(0.9, 0.95), eps=1e-8, fused=True
+        [{'params': decay_params, 'weight_decay': train_config.weight_decay}, {'params': no_decay_params, 'weight_decay': 0.0}],
+        lr=train_config.lr, betas=train_config.betas, eps=train_config.eps_optim, fused=True
     )
     return optimizer
 
@@ -129,8 +133,8 @@ def load_last_checkpoint(raw_model, device, optimizer, scheduler, train_config, 
 
         tokens_per_step = train_config.batch_size * model_config.seq_len * train_config.accumulation_steps
         tokens_seen = resume_step * tokens_per_step
-        AVG_TOKENS_PER_DOC = 1000 
-        docs_to_skip = int(tokens_seen / AVG_TOKENS_PER_DOC)
+        avg_tokens_per_doc = 1000 
+        docs_to_skip = int(tokens_seen / avg_tokens_per_doc)
 
         print(f"loaded checkpoint {resume_step}, skipped {docs_to_skip} documents")
 
@@ -214,6 +218,7 @@ def main():
     
     storage.save_final_model(raw_model, train_config.repo_id)
     storage.wait_for_uploads()
+
 
 
 if __name__ == "__main__":
