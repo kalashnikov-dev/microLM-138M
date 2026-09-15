@@ -29,7 +29,6 @@ class ModelConfig:
 
 
 class TransformerBlock(nn.Module):
-
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
@@ -87,7 +86,6 @@ class TransformerBlock(nn.Module):
 
 
 class Model(nn.Module):
-
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config

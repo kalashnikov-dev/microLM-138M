@@ -6,6 +6,8 @@ from safetensors.torch import load_file
 from model import ModelConfig
 from transformers import AutoTokenizer
 from dataclasses import dataclass
+from datasets import load_dataset
+from torch.utils.data import DataLoader, IterableDataset
 
 import peft.tuners.lora.torchao
 peft.tuners.lora.torchao.is_torchao_available = lambda: False
@@ -16,6 +18,9 @@ peft.tuners.lora.torchao.is_torchao_available = lambda: False
 class SFTConfig:
     filename: str = "checkpoint_82000.safetensors"
 
+    epochs: int = 2
+    batch_size: int = 1
+
     rank: int = 16
     alpha: int = 32
     targets: tuple = ("q", "k", "v", "o", "w1", "w2", "w3") # not list because dataclass doesnt support mutable obj
@@ -25,6 +30,54 @@ class SFTConfig:
     betas: tuple = (0.9, 0.95)
     eps_optim: float = 1e-8
 
+
+#looks complex but basically just masking user queries
+class SFTStreamingDataset(IterableDataset):
+    def __init__(self, stream, tokenizer, seq_len):
+        self.stream = stream
+        self.tokenizer = tokenizer
+        self.seq_len = seq_len
+    
+    def __iter__(self):
+        input_buf, label_buf = [], []
+        
+        for example in self.stream:
+            for msg in example["messages"]:
+                role = msg["role"]
+                content = msg["content"]
+                
+                if role == "user":
+                    text = f"User:\n{content}\n\n"
+                    tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                    input_buf.extend(tokens)
+                    label_buf.extend([-100] * len(tokens))
+                    
+                elif role == "system":
+                    text = f"System:\n{content}\n\n"
+                    tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                    input_buf.extend(tokens)
+                    label_buf.extend([-100] * len(tokens))
+                    
+                elif role == "assistant":
+                    text = f"Assistant:\n{content}"
+                    tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                    
+                    tokens.append(self.tokenizer.eos_token_id)
+                    
+                    sep_tokens = self.tokenizer.encode("\n\n", add_special_tokens=False)
+                    
+                    input_buf.extend(tokens + sep_tokens)
+                    label_buf.extend(tokens + [-100] * len(sep_tokens))
+                else:
+                    continue
+            
+            while len(input_buf) >= self.seq_len + 1:
+                yield (
+                    torch.tensor(input_buf[:self.seq_len + 1], dtype=torch.long),
+                    torch.tensor(label_buf[:self.seq_len + 1], dtype=torch.long)
+                )
+                input_buf = input_buf[self.seq_len:]
+                label_buf = label_buf[self.seq_len:]
 
 
 def configure_device():
@@ -61,19 +114,34 @@ def build_lora_model(device, sft_config, lora_config, model_config):
     return lora_model
 
 
-def build_optimizer(lora_model, lora_config):
-    trainable_params = [p for p in lora_model.parameters if p.requires_grad]
+def build_optimizer(lora_model, sft_config):
+    trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
 
     optimizer = torch.optim.AdamW(
     trainable_params,
-    lr=lora_config.lr, 
-    weight_decay=lora_config.weight_decay,
-    betas=lora_config.betas,
-    eps=lora_config.eps_optim,
+    lr=sft_config.lr, 
+    weight_decay=sft_config.weight_decay,
+    betas=sft_config.betas,
+    eps=sft_config.eps_optim,
     fused=True
     )
     
     return optimizer
+
+
+def build_dataloader(tokenizer, sft_config, model_config):
+    stream = load_dataset(
+        "HuggingFaceTB/smol-smoltalk", 
+        split="train", 
+        streaming=True
+    ).shuffle(seed=1337, buffer_size=10_000)
+    dataset = SFTStreamingDataset(stream, tokenizer, model_config.seq_len)
+    dataloader = DataLoader(dataset, batch_size=sft_config.batch_size, pin_memory=True) 
+
+    return dataloader
+
+
+
 
 
 def main():
@@ -81,7 +149,8 @@ def main():
     tokenizer = build_tokenizer()
     sft_config, lora_config, model_config = build_configs(tokenizer)
     lora_model = build_lora_model(device, sft_config, lora_config, model_config)
-    optimizer = build_optimizer(lora_model, lora_config)
+    optimizer = build_optimizer(lora_model, sft_config)
+    dataloader = build_dataloader(tokenizer, sft_config, model_config)
 
 
     lora_model.print_trainable_parameters()
