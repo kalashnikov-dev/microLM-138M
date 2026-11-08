@@ -17,7 +17,7 @@ from model import Model, ModelConfig
 
 @dataclass
 class TrainConfig:
-    repo_id: str = "kalashnikov-dev/miniLM"
+    repo_id: str = "kalashnikov-dev/microLM-138M"
 
     batch_size: int = 64
     accumulation_steps: int = 2
