@@ -2,7 +2,7 @@
 
 # microLM-138M
 
-**A 138M-parameter language model written and trained from scratch — 27.5B tokens of pretraining plus instruction tuning, all on a single GPU.**
+**A 138M-parameter language model written and trained from scratch — 27.5B tokens of pretraining plus instruction tuning.**
 
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-microLM--138M-FFD21E)](https://huggingface.co/kalashnikov-dev/microLM-138M)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.13-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
@@ -12,7 +12,7 @@
 
 ---
 
-I built this to understand how a modern LLM works end to end — not only the model code, but the whole pipeline around it: streaming data, mixed precision, gradient accumulation, checkpointing, surviving spot-instance preemptions, and instruction tuning.
+The goal was to understand how modern LLMs work end to end — not only the model code, but the whole pipeline around it: streaming data, mixed precision, gradient accumulation, checkpointing, surviving spot-instance preemptions, and instruction tuning.
 
 No training framework was used. The architecture, training loop, data pipeline and inference code are all in this repo, in plain PyTorch.
 
@@ -118,8 +118,6 @@ The parts that took the most time were not the model.
 
 **Gradient checkpointing made training *faster*.** It normally costs ~30% throughput in exchange for memory. Here it freed enough memory to raise the batch size from 8 to 64, and the better GPU utilization more than paid for the recomputation — about 15% net gain in tokens/s.
 
-**A memory leak in the data pipeline.** The first run froze the whole VM after one step. Host RAM, not VRAM: the streaming pipeline leaked several MB per document, so 16GB disappeared in about three minutes. I isolated it by measuring RSS growth per document across variants — turning the HF shuffle off, dropping unused columns, changing the parquet batch size, swapping the allocator. `jemalloc` cut it by 35% and only requesting the `text` column cut it in half again, which was enough to get through the run.
-
 **Spot instances.** They are ~1.7× cheaper and get taken away without warning. Checkpoints are written atomically (temp file plus `os.replace`) so a kill mid-write cannot corrupt them, old ones are rotated, and every 5,000 steps one is uploaded to the Hub in a background thread. A PowerShell watchdog (`scripts/`) polls the instance and restarts it as soon as capacity frees up.
 
 ## Limitations
@@ -143,14 +141,13 @@ The parts that took the most time were not the model.
 model.py        architecture (config, transformer block, model)
 pre-train.py    pretraining loop
 sft.py          LoRA instruction tuning with loss masking
-generate.py     sampling and interactive chat, base vs SFT
 storage.py      atomic checkpointing, rotation, Hub uploads
 scripts/        spot-instance watchdog
 ```
 
 ## A note on AI assistance
 
-An AI assistant helped with three things: sorting out tensor dimension mismatches in function calls, the CUDA and kernel-level optimizations, and the PowerShell watchdog in `scripts/`. The architecture, the training loop and the data pipeline I wrote myself, even inline comletion was turned off whole time for a challange.
+An AI assistant helped mostly with three things: resolving tensor dimension mismatches in function calls, the CUDA and kernel-level optimizations, and the PowerShell watchdog in `scripts/`. The architecture, the training loop and the data pipeline I wrote myself, even inline code comlpetion was turned off whole time as a challange.
 
 ## Acknowledgements
 

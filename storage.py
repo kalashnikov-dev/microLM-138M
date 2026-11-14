@@ -63,7 +63,7 @@ def load_checkpoint(device):
 
 
 def save_final_model(raw_model, repo_id):
-    file_name = "model.safetensors"
+    file_name = "model.safetensors" # hardcoded for now
     safe_state_dict = { # safetensors requires contiguous tensors 
         k: v.detach().cpu().contiguous() 
         for k, v in raw_model.state_dict().items()
